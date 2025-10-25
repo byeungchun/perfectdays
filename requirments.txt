@@ -1,1 +1,10 @@
+dotenv
+tqdm
+
+pyodbc
 pandas
+polars
+sqlalchemy
+fastparquet
+pyarrow
+sentence-transformers
