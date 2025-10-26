@@ -8,3 +8,4 @@ sqlalchemy
 fastparquet
 pyarrow
 sentence-transformers
+openpyxl
