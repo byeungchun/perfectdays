@@ -9,3 +9,4 @@ fastparquet
 pyarrow
 sentence-transformers
 openpyxl
+plotly
