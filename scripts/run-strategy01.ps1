@@ -10,7 +10,8 @@ param(
     [double]$VwapRelStdMax = 0.005,
     [string[]]$Tickers = @(),
     [switch]$AllTickers,
-    [switch]$EnhancedSell
+    [switch]$EnhancedSell,
+    [int]$MaxWorkers = 0
 )
 
 # Example usage:
@@ -18,7 +19,8 @@ param(
 #   -EnvPath C:\Users\byeun\workspace\perfectdays\.env `
 #   -OutputDir C:\Users\byeun\Downloads `
 #   -Tickers A010420,A005930 `
-#   -EnhancedSell
+#   -EnhancedSell `
+#   -MaxWorkers 4
 
 $ErrorActionPreference = "Stop"
 
@@ -52,6 +54,10 @@ if ($AllTickers.IsPresent) {
 
 if ($EnhancedSell.IsPresent) {
     $arguments += "--enhanced-sell"
+}
+
+if ($MaxWorkers -gt 0) {
+    $arguments += @("--max-workers", $MaxWorkers)
 }
 
 Push-Location $repoRoot

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import polars as pl
@@ -62,6 +63,7 @@ def run_simulation(
     budget: float,
     ticker_filter: set[str] | None,
     enhanced_sell: bool,
+    max_workers: int | None,
 ) -> tuple[dict, dict, dict, float]:
     investor = InvestorAgent(
         budget=budget,
@@ -70,17 +72,38 @@ def run_simulation(
         enhanced_sell=enhanced_sell,
     )
     simuldates_done: list = []
+    worker_count = max_workers if max_workers and max_workers > 1 else None
 
-    for simuldate in tqdm(simul_dates, desc="Restructuring stocks for simulation"):
-        if len(simuldates_done) < minimum_records:
-            simuldates_done.append(simuldate)
-            continue
-
-        for stock in stocks:
-            prepared = prepare_parameters(stock, simuldate, minimum_records, ticker_filter)
-            if not prepared:
+    def process_loop(pool: ThreadPoolExecutor | None) -> None:
+        for simuldate in tqdm(simul_dates, desc="Restructuring stocks for simulation"):
+            if len(simuldates_done) < minimum_records:
+                simuldates_done.append(simuldate)
                 continue
-            investor.process_stock(simuldate, prepared)
+
+            if pool:
+                def _prepare(stock: dict) -> tuple | None:
+                    return prepare_parameters(
+                        stock,
+                        simuldate,
+                        minimum_records,
+                        ticker_filter,
+                    )
+
+                for prepared in pool.map(_prepare, stocks):
+                    if prepared:
+                        investor.process_stock(simuldate, prepared)
+            else:
+                for stock in stocks:
+                    prepared = prepare_parameters(stock, simuldate, minimum_records, ticker_filter)
+                    if not prepared:
+                        continue
+                    investor.process_stock(simuldate, prepared)
+
+    if worker_count:
+        with ThreadPoolExecutor(max_workers=worker_count) as pool:
+            process_loop(pool)
+    else:
+        process_loop(None)
 
     return investor.results()
 
@@ -120,6 +143,15 @@ def parse_args() -> argparse.Namespace:
         "--enhanced-sell",
         action="store_true",
         help="Enable enhanced selling logic for trade exits.",
+    )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=None,
+        help=(
+            "Number of worker threads to prepare stock parameters. "
+            "Values <= 1 disable concurrency."
+        ),
     )
     return parser.parse_args()
 
@@ -163,6 +195,7 @@ def main() -> int:
         budget=args.budget,
         ticker_filter=ticker_filter,
         enhanced_sell=args.enhanced_sell,
+        max_workers=args.max_workers,
     )
 
     report_simulation_summary(simulation_results, shares_owned, revenue_records)
