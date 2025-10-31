@@ -1,16 +1,33 @@
 """CLI-friendly version of the strategy 01 agent notebook."""
 
+from __future__ import annotations
+
 import argparse
 import os
+import sys
 from pathlib import Path
 
 import polars as pl
 from dotenv import load_dotenv
 from tqdm import tqdm
 
-from investor_agent import InvestorAgent
-from result_analysis import persist_results, report_final_outcome, report_simulation_summary
-from stock_agent import build_stock_agents, compute_marketcap_timeseries, prepare_parameters
+if __package__ is None or __package__ == "":  # pragma: no cover - script execution fallback
+    sys.path.append(str(Path(__file__).resolve().parent))
+    from investor_agent import InvestorAgent  # type: ignore
+    from result_analysis import (  # type: ignore
+        persist_results,
+        report_final_outcome,
+        report_simulation_summary,
+    )
+    from stock_agent import (  # type: ignore
+        build_stock_agents,
+        compute_marketcap_timeseries,
+        prepare_parameters,
+    )
+else:  # pragma: no cover - module execution
+    from .investor_agent import InvestorAgent
+    from .result_analysis import persist_results, report_final_outcome, report_simulation_summary
+    from .stock_agent import build_stock_agents, compute_marketcap_timeseries, prepare_parameters
 
 
 def load_environment(env_path: Path) -> Path:
