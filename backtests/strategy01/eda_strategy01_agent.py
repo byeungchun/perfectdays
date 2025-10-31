@@ -109,12 +109,12 @@ def parse_args() -> argparse.Namespace:
         "--ticker",
         dest="tickers",
         action="append",
-        help="Ticker(s) to include. Repeat for multiple tickers. Defaults to ['A010420'].",
+        help="Ticker(s) to include. Repeat for multiple tickers. If omitted, all tickers are processed.",
     )
     parser.add_argument(
         "--all-tickers",
         action="store_true",
-        help="Process all tickers instead of the default filter.",
+        help="Process all tickers (default when --ticker is not provided).",
     )
     parser.add_argument(
         "--enhanced-sell",
@@ -149,10 +149,10 @@ def main() -> int:
         print("No simulation dates available after aggregating market data.")
         return 1
 
-    if args.all_tickers:
+    if args.all_tickers or not args.tickers:
         ticker_filter = None
     else:
-        ticker_filter = set(args.tickers) if args.tickers else {"A010420"}
+        ticker_filter = set(args.tickers)
 
     simulation_results, shares_owned, revenue_records, cash_balance = run_simulation(
         stocks,
