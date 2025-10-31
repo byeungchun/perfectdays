@@ -125,3 +125,36 @@ def prepare_parameters(
     vol_std = ts_hist["volume"].std()
     vol = tstarget["volume"]
     return ticker, ts_hist, tstarget, vwap_mean, vwap_std, vol_mean, vol_std, vol
+
+
+def build_prepared_stock_signals(
+    stock: dict,
+    minimum_records: int,
+) -> tuple[str, pd.DataFrame | None]:
+    ticker = stock["ticker"]
+    ts_prices = stock["stock"].ts_prices.copy()
+    if ts_prices.empty:
+        return ticker, None
+
+    ts_prices = ts_prices.sort_values("pricingDate")
+    ts_prices["pricingDate"] = pd.to_datetime(ts_prices["pricingDate"])
+    ts_prices.set_index("pricingDate", inplace=True)
+
+    required_columns = ["VWAP", "volume", "priceClose", "marketCap", "sharesOutstanding"]
+    ts_prices = ts_prices.dropna(subset=required_columns)
+    if ts_prices.shape[0] <= minimum_records:
+        return ticker, None
+
+    rolling_window = ts_prices["VWAP"].rolling(window=minimum_records, min_periods=minimum_records)
+    ts_prices["vwap_mean"] = rolling_window.mean().shift(1)
+    ts_prices["vwap_std"] = rolling_window.std().shift(1)
+
+    vol_window = ts_prices["volume"].rolling(window=minimum_records, min_periods=minimum_records)
+    ts_prices["vol_mean"] = vol_window.mean().shift(1)
+    ts_prices["vol_std"] = vol_window.std().shift(1)
+
+    ts_prices.dropna(subset=["vwap_mean", "vwap_std", "vol_mean", "vol_std"], inplace=True)
+    if ts_prices.empty:
+        return ticker, None
+
+    return ticker, ts_prices

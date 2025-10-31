@@ -7,6 +7,7 @@ import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import polars as pl
 from dotenv import load_dotenv
@@ -21,14 +22,40 @@ if __package__ is None or __package__ == "":  # pragma: no cover - script execut
         report_simulation_summary,
     )
     from stock_agent import (  # type: ignore
+        build_prepared_stock_signals,
         build_stock_agents,
         compute_marketcap_timeseries,
-        prepare_parameters,
     )
 else:  # pragma: no cover - module execution
     from .investor_agent import InvestorAgent
     from .result_analysis import persist_results, report_final_outcome, report_simulation_summary
-    from .stock_agent import build_stock_agents, compute_marketcap_timeseries, prepare_parameters
+    from .stock_agent import build_prepared_stock_signals, build_stock_agents, compute_marketcap_timeseries
+
+if TYPE_CHECKING:  # pragma: no cover - type checking only
+    import pandas as pd
+
+
+def _build_signal_lookup(
+    stocks: list[dict],
+    minimum_records: int,
+    max_workers: int | None,
+) -> dict[str, "pd.DataFrame"]:
+    import pandas as pd  # local import to avoid mandatory dependency when unused
+
+    def compute(stock: dict) -> tuple[str, pd.DataFrame | None]:
+        return build_prepared_stock_signals(stock, minimum_records)
+
+    if max_workers and max_workers > 1:
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            results = list(pool.map(compute, stocks))
+    else:
+        results = [compute(stock) for stock in stocks]
+
+    lookup: dict[str, pd.DataFrame] = {}
+    for ticker, frame in results:
+        if frame is not None:
+            lookup[ticker] = frame
+    return lookup
 
 
 def load_environment(env_path: Path) -> Path:
@@ -72,38 +99,34 @@ def run_simulation(
         enhanced_sell=enhanced_sell,
     )
     simuldates_done: list = []
-    worker_count = max_workers if max_workers and max_workers > 1 else None
+    signal_lookup = _build_signal_lookup(stocks, minimum_records, max_workers)
 
-    def process_loop(pool: ThreadPoolExecutor | None) -> None:
-        for simuldate in tqdm(simul_dates, desc="Restructuring stocks for simulation"):
-            if len(simuldates_done) < minimum_records:
-                simuldates_done.append(simuldate)
+    for simuldate in tqdm(simul_dates, desc="Running simulation"):
+        if len(simuldates_done) < minimum_records:
+            simuldates_done.append(simuldate)
+            continue
+
+        for stock in stocks:
+            ticker = stock["ticker"]
+            if ticker_filter and ticker not in ticker_filter:
                 continue
 
-            if pool:
-                def _prepare(stock: dict) -> tuple | None:
-                    return prepare_parameters(
-                        stock,
-                        simuldate,
-                        minimum_records,
-                        ticker_filter,
-                    )
+            signals = signal_lookup.get(ticker)
+            if signals is None or simuldate not in signals.index:
+                continue
 
-                for prepared in pool.map(_prepare, stocks):
-                    if prepared:
-                        investor.process_stock(simuldate, prepared)
-            else:
-                for stock in stocks:
-                    prepared = prepare_parameters(stock, simuldate, minimum_records, ticker_filter)
-                    if not prepared:
-                        continue
-                    investor.process_stock(simuldate, prepared)
-
-    if worker_count:
-        with ThreadPoolExecutor(max_workers=worker_count) as pool:
-            process_loop(pool)
-    else:
-        process_loop(None)
+            row = signals.loc[simuldate]
+            prepared = (
+                ticker,
+                None,
+                row,
+                float(row["vwap_mean"]),
+                float(row["vwap_std"]),
+                float(row["vol_mean"]),
+                float(row["vol_std"]),
+                float(row["volume"]),
+            )
+            investor.process_stock(simuldate, prepared)
 
     return investor.results()
 
@@ -149,8 +172,8 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help=(
-            "Number of worker threads to prepare stock parameters. "
-            "Values <= 1 disable concurrency."
+            "Number of worker threads for per-stock signal precomputation. "
+            "Values <= 1 run sequentially."
         ),
     )
     return parser.parse_args()

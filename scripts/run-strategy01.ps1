@@ -21,6 +21,7 @@ param(
 #   -Tickers A010420,A005930 `
 #   -EnhancedSell `
 #   -MaxWorkers 4
+#   # MaxWorkers controls concurrent preprocessing of stock signals.
 
 $ErrorActionPreference = "Stop"
 
