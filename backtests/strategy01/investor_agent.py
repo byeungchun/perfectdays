@@ -16,6 +16,12 @@ class InvestorAgent:
         vwap_rel_std_max: float,
         enhanced_sell: bool,
         sell_after_days: int = 5,
+        min_hold_days: int = 0,
+        take_profit_pct: float | None = None,
+        stop_loss_pct: float | None = None,
+        trailing_stop_pct: float | None = None,
+        partial_sell_ratio: float | None = None,
+        prioritize_time_exit: bool = False,
     ) -> None:
         self.initial_budget = budget
         self.cash_balance = budget
@@ -23,6 +29,16 @@ class InvestorAgent:
         self.vwap_rel_std_max = vwap_rel_std_max
         self.enhanced_sell = enhanced_sell
         self.sell_after_days = sell_after_days
+        self.min_hold_days = min_hold_days
+        self.take_profit_pct = take_profit_pct
+        self.stop_loss_pct = stop_loss_pct
+        self.trailing_stop_pct = trailing_stop_pct
+        self.partial_sell_ratio = partial_sell_ratio
+        self.prioritize_time_exit = prioritize_time_exit
+        if self.min_hold_days < 0:
+            raise ValueError("min_hold_days must be non-negative")
+        if self.partial_sell_ratio is not None and not 0 < self.partial_sell_ratio <= 1:
+            raise ValueError("partial_sell_ratio must be between 0 and 1")
         self.shares_owned: dict[str, list] = defaultdict(list)
         self.revenue_records: dict[str, list] = defaultdict(list)
         self.simulation_results: dict[str, list] = defaultdict(list)
@@ -63,6 +79,12 @@ class InvestorAgent:
             tstarget,
             ticker,
             simul_res,
+            min_hold_days=self.min_hold_days,
+            take_profit_pct=self.take_profit_pct,
+            stop_loss_pct=self.stop_loss_pct,
+            trailing_stop_pct=self.trailing_stop_pct,
+            partial_sell_ratio=self.partial_sell_ratio,
+            prioritize_time_exit=self.prioritize_time_exit,
         )
 
         vol_pop, vwap_stable, investment_signal = self._decide_buy_signal(

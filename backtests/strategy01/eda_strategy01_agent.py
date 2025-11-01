@@ -7,9 +7,10 @@ import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Mapping
 
 import polars as pl
+import yaml
 from dotenv import load_dotenv
 from tqdm import tqdm
 
@@ -33,6 +34,34 @@ else:  # pragma: no cover - module execution
 
 if TYPE_CHECKING:  # pragma: no cover - type checking only
     import pandas as pd
+
+
+def load_strategy_config(config_path: Path | None) -> dict[str, Any]:
+    if config_path is None:
+        return {}
+    path = config_path.expanduser().resolve()
+    if not path.exists():
+        return {}
+    with path.open("r", encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+    if not isinstance(data, Mapping):
+        raise ValueError("Strategy config must be a mapping of parameter names to values")
+    return dict(data)
+
+
+DEFAULT_STRATEGY_SETTINGS: dict[str, Any] = {
+    "budget": 100_000_000.0,
+    "z_vol": 1.0,
+    "vwap_rel_std_max": 0.005,
+    "enhanced_sell": False,
+    "sell_after_days": 5,
+    "min_hold_days": 0,
+    "take_profit_pct": None,
+    "stop_loss_pct": None,
+    "trailing_stop_pct": None,
+    "partial_sell_ratio": None,
+    "prioritize_time_exit": False,
+}
 
 
 def _build_signal_lookup(
@@ -91,12 +120,26 @@ def run_simulation(
     ticker_filter: set[str] | None,
     enhanced_sell: bool,
     max_workers: int | None,
+    sell_after_days: int,
+    min_hold_days: int,
+    take_profit_pct: float | None,
+    stop_loss_pct: float | None,
+    trailing_stop_pct: float | None,
+    partial_sell_ratio: float | None,
+    prioritize_time_exit: bool,
 ) -> tuple[dict, dict, dict, float]:
     investor = InvestorAgent(
         budget=budget,
         z_vol=z_vol,
         vwap_rel_std_max=vwap_rel_std_max,
         enhanced_sell=enhanced_sell,
+        sell_after_days=sell_after_days,
+        min_hold_days=min_hold_days,
+        take_profit_pct=take_profit_pct,
+        stop_loss_pct=stop_loss_pct,
+        trailing_stop_pct=trailing_stop_pct,
+        partial_sell_ratio=partial_sell_ratio,
+        prioritize_time_exit=prioritize_time_exit,
     )
     simuldates_done: list = []
     signal_lookup = _build_signal_lookup(stocks, minimum_records, max_workers)
@@ -133,8 +176,15 @@ def run_simulation(
 
 def parse_args() -> argparse.Namespace:
     default_env = Path(__file__).resolve().parents[1] / ".env"
+    default_config = Path(__file__).resolve().parents[3] / "config" / "strategy01.yaml"
     parser = argparse.ArgumentParser(description="Run the strategy 01 agent simulation.")
     parser.add_argument("--env-path", default=default_env, type=Path, help="Path to the .env file or its parent directory.")
+    parser.add_argument(
+        "--config",
+        default=default_config,
+        type=Path,
+        help="Path to a YAML file containing InvestorAgent parameters.",
+    )
     parser.add_argument(
         "--output-dir",
         default=Path.home() / "Downloads",
@@ -143,13 +193,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--minimum-records", default=20, type=int, help="Minimum lookback window for signals.")
     parser.add_argument("--min-agent-days", default=240, type=int, help="Minimum history days required to keep an agent.")
-    parser.add_argument("--budget", default=100_000_000, type=float, help="Total simulation budget.")
-    parser.add_argument("--z-vol", default=1.0, type=float, help="Z-score threshold for volume popularity.")
+    parser.add_argument("--budget", type=float, default=None, help="Override total simulation budget from config.")
+    parser.add_argument("--z-vol", type=float, default=None, help="Override Z-score threshold for volume popularity.")
     parser.add_argument(
         "--vwap-rel-std-max",
-        default=0.005,
+        default=None,
         type=float,
-        help="Relative VWAP std threshold for stability.",
+        help="Override relative VWAP std threshold for stability.",
     )
     parser.add_argument(
         "--ticker",
@@ -164,8 +214,63 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--enhanced-sell",
+        dest="enhanced_sell",
         action="store_true",
-        help="Enable enhanced selling logic for trade exits.",
+        help="Enable enhanced selling logic regardless of config settings.",
+    )
+    parser.add_argument(
+        "--no-enhanced-sell",
+        dest="enhanced_sell",
+        action="store_false",
+        help="Disable enhanced selling logic regardless of config settings.",
+    )
+    parser.add_argument(
+        "--sell-after-days",
+        type=int,
+        default=None,
+        help="Override number of days after which to force a sale.",
+    )
+    parser.add_argument(
+        "--min-hold-days",
+        type=int,
+        default=None,
+        help="Set minimum holding days required before rule-based exits.",
+    )
+    parser.add_argument(
+        "--take-profit-pct",
+        type=float,
+        default=None,
+        help="Take-profit proportion (e.g. 0.05 for a 5 percent gain).",
+    )
+    parser.add_argument(
+        "--stop-loss-pct",
+        type=float,
+        default=None,
+        help="Stop-loss proportion (e.g. 0.03 for a 3 percent drop).",
+    )
+    parser.add_argument(
+        "--trailing-stop-pct",
+        type=float,
+        default=None,
+        help="Trailing stop proportion based on peak price since entry.",
+    )
+    parser.add_argument(
+        "--partial-sell-ratio",
+        type=float,
+        default=None,
+        help="Fraction of holdings to sell when exit triggers (<1 keeps a residual position).",
+    )
+    parser.add_argument(
+        "--prioritize-time-exit",
+        dest="prioritize_time_exit",
+        action="store_true",
+        help="When enabled, time-based exits supersede other sell rules.",
+    )
+    parser.add_argument(
+        "--no-prioritize-time-exit",
+        dest="prioritize_time_exit",
+        action="store_false",
+        help="Ensure rule-based exits can trigger before the time-based exit.",
     )
     parser.add_argument(
         "--max-workers",
@@ -176,6 +281,7 @@ def parse_args() -> argparse.Namespace:
             "Values <= 1 run sequentially."
         ),
     )
+    parser.set_defaults(enhanced_sell=None, prioritize_time_exit=None)
     return parser.parse_args()
 
 
@@ -209,16 +315,171 @@ def main() -> int:
     else:
         ticker_filter = set(args.tickers)
 
+    try:
+        strategy_cfg = load_strategy_config(args.config)
+    except Exception as exc:
+        print(f"Failed to load strategy config: {exc}")
+        return 1
+
+    config_path = args.config.expanduser().resolve() if args.config else None
+    if config_path and not config_path.exists():
+        print(f"Strategy config not found at {config_path}; relying on CLI defaults and overrides.")
+    elif strategy_cfg:
+        print(f"Loaded strategy config from {config_path}")
+    else:
+        print("Strategy config provided no values; relying on CLI defaults and overrides.")
+
+    def resolve(name: str, cli_value: Any, default: Any) -> Any:
+        if cli_value is not None:
+            return cli_value
+        if strategy_cfg and name in strategy_cfg and strategy_cfg[name] is not None:
+            return strategy_cfg[name]
+        return default
+
+    def resolve_numeric(
+        name: str,
+        cli_value: Any,
+        default: Any,
+        *,
+        cast,
+        allow_none: bool = False,
+    ) -> Any:
+        value = resolve(name, cli_value, default)
+        if value is None:
+            if allow_none:
+                return None
+            raise ValueError(f"Parameter '{name}' is required but missing in config/CLI")
+        try:
+            return cast(value)
+        except (TypeError, ValueError) as err:
+            raise ValueError(f"Parameter '{name}' must be {cast.__name__}-compatible, got {value!r}") from err
+
+    def resolve_bool(name: str, cli_value: Any, default: bool) -> bool:
+        value = resolve(name, cli_value, default)
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"true", "1", "yes", "y", "on"}:
+                return True
+            if lowered in {"false", "0", "no", "n", "off"}:
+                return False
+        if isinstance(value, (int, float)) and value in {0, 1}:
+            return bool(value)
+        raise ValueError(f"Parameter '{name}' must be boolean-compatible, got {value!r}")
+
+    try:
+        strategy_params = {
+            "budget": resolve_numeric("budget", args.budget, DEFAULT_STRATEGY_SETTINGS["budget"], cast=float),
+            "z_vol": resolve_numeric("z_vol", args.z_vol, DEFAULT_STRATEGY_SETTINGS["z_vol"], cast=float),
+            "vwap_rel_std_max": resolve_numeric(
+                "vwap_rel_std_max",
+                args.vwap_rel_std_max,
+                DEFAULT_STRATEGY_SETTINGS["vwap_rel_std_max"],
+                cast=float,
+            ),
+            "enhanced_sell": resolve_bool(
+                "enhanced_sell",
+                args.enhanced_sell,
+                DEFAULT_STRATEGY_SETTINGS["enhanced_sell"],
+            ),
+            "sell_after_days": resolve_numeric(
+                "sell_after_days",
+                args.sell_after_days,
+                DEFAULT_STRATEGY_SETTINGS["sell_after_days"],
+                cast=int,
+            ),
+            "min_hold_days": resolve_numeric(
+                "min_hold_days",
+                args.min_hold_days,
+                DEFAULT_STRATEGY_SETTINGS["min_hold_days"],
+                cast=int,
+            ),
+            "take_profit_pct": resolve_numeric(
+                "take_profit_pct",
+                args.take_profit_pct,
+                DEFAULT_STRATEGY_SETTINGS["take_profit_pct"],
+                cast=float,
+                allow_none=True,
+            ),
+            "stop_loss_pct": resolve_numeric(
+                "stop_loss_pct",
+                args.stop_loss_pct,
+                DEFAULT_STRATEGY_SETTINGS["stop_loss_pct"],
+                cast=float,
+                allow_none=True,
+            ),
+            "trailing_stop_pct": resolve_numeric(
+                "trailing_stop_pct",
+                args.trailing_stop_pct,
+                DEFAULT_STRATEGY_SETTINGS["trailing_stop_pct"],
+                cast=float,
+                allow_none=True,
+            ),
+            "partial_sell_ratio": resolve_numeric(
+                "partial_sell_ratio",
+                args.partial_sell_ratio,
+                DEFAULT_STRATEGY_SETTINGS["partial_sell_ratio"],
+                cast=float,
+                allow_none=True,
+            ),
+            "prioritize_time_exit": resolve_bool(
+                "prioritize_time_exit",
+                args.prioritize_time_exit,
+                DEFAULT_STRATEGY_SETTINGS["prioritize_time_exit"],
+            ),
+        }
+    except ValueError as exc:
+        print(f"Configuration error: {exc}")
+        return 1
+
+    for key in ("take_profit_pct", "stop_loss_pct", "trailing_stop_pct"):
+        value = strategy_params[key]
+        if value is not None and value < 0:
+            print(f"Configuration error: '{key}' must be non-negative; received {value}")
+            return 1
+    ratio = strategy_params["partial_sell_ratio"]
+    if ratio is not None and not 0 < ratio <= 1:
+        print("Configuration error: 'partial_sell_ratio' must be between 0 and 1 (exclusive of 0).")
+        return 1
+    if strategy_params["sell_after_days"] < 0:
+        print("Configuration error: 'sell_after_days' must be non-negative.")
+        return 1
+    if strategy_params["min_hold_days"] < 0:
+        print("Configuration error: 'min_hold_days' must be non-negative.")
+        return 1
+
+    print(
+        "Investor configuration:",
+        {
+            "budget": strategy_params["budget"],
+            "z_vol": strategy_params["z_vol"],
+            "vwap_rel_std_max": strategy_params["vwap_rel_std_max"],
+            "enhanced_sell": strategy_params["enhanced_sell"],
+            "sell_after_days": strategy_params["sell_after_days"],
+            "min_hold_days": strategy_params["min_hold_days"],
+        },
+    )
+
     simulation_results, shares_owned, revenue_records, cash_balance = run_simulation(
         stocks,
         simul_dates,
         minimum_records=args.minimum_records,
-        z_vol=args.z_vol,
-        vwap_rel_std_max=args.vwap_rel_std_max,
-        budget=args.budget,
+        z_vol=strategy_params["z_vol"],
+        vwap_rel_std_max=strategy_params["vwap_rel_std_max"],
+        budget=strategy_params["budget"],
         ticker_filter=ticker_filter,
-        enhanced_sell=args.enhanced_sell,
+        enhanced_sell=strategy_params["enhanced_sell"],
         max_workers=args.max_workers,
+        sell_after_days=strategy_params["sell_after_days"],
+        min_hold_days=strategy_params["min_hold_days"],
+        take_profit_pct=strategy_params["take_profit_pct"],
+        stop_loss_pct=strategy_params["stop_loss_pct"],
+        trailing_stop_pct=strategy_params["trailing_stop_pct"],
+        partial_sell_ratio=strategy_params["partial_sell_ratio"],
+        prioritize_time_exit=strategy_params["prioritize_time_exit"],
     )
 
     report_simulation_summary(simulation_results, shares_owned, revenue_records)

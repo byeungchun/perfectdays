@@ -5,13 +5,23 @@ param(
     [string]$OutputDir = (Join-Path $env:USERPROFILE "Downloads"),
     [int]$MinimumRecords = 20,
     [int]$MinAgentDays = 240,
-    [double]$Budget = 100000000,
-    [double]$ZVol = 1.0,
-    [double]$VwapRelStdMax = 0.005,
+    [Nullable[Double]]$Budget,
+    [Nullable[Double]]$ZVol,
+    [Nullable[Double]]$VwapRelStdMax,
     [string[]]$Tickers = @(),
     [switch]$AllTickers,
     [switch]$EnhancedSell,
-    [int]$MaxWorkers = 0
+    [switch]$NoEnhancedSell,
+    [int]$MaxWorkers = 0,
+    [string]$ConfigPath,
+    [Nullable[Int32]]$SellAfterDays,
+    [Nullable[Int32]]$MinHoldDays,
+    [Nullable[Double]]$TakeProfitPct,
+    [Nullable[Double]]$StopLossPct,
+    [Nullable[Double]]$TrailingStopPct,
+    [Nullable[Double]]$PartialSellRatio,
+    [switch]$PrioritizeTimeExit,
+    [switch]$NoPrioritizeTimeExit
 )
 
 # Example usage:
@@ -22,6 +32,8 @@ param(
 #   -EnhancedSell `
 #   -MaxWorkers 4
 #   # MaxWorkers controls concurrent preprocessing of stock signals.
+#   -ConfigPath C:\Users\byeun\workspace\perfectdays\config\strategy01.yaml
+#   -SellAfterDays 5
 
 $ErrorActionPreference = "Stop"
 
@@ -32,16 +44,38 @@ if (-not $EnvPath) {
     $EnvPath = Join-Path $repoRoot ".env"
 }
 
+if ($EnhancedSell.IsPresent -and $NoEnhancedSell.IsPresent) {
+    throw "Specify only one of -EnhancedSell or -NoEnhancedSell."
+}
+
+if ($PrioritizeTimeExit.IsPresent -and $NoPrioritizeTimeExit.IsPresent) {
+    throw "Specify only one of -PrioritizeTimeExit or -NoPrioritizeTimeExit."
+}
+
+if (-not $PSBoundParameters.ContainsKey("ConfigPath")) {
+    $ConfigPath = Join-Path (Join-Path $repoRoot "config") "strategy01.yaml"
+}
+
 $arguments = @(
     "-m", "backtests.strategy01.eda_strategy01_agent",
     "--env-path", $EnvPath,
+    "--config", $ConfigPath,
     "--output-dir", $OutputDir,
     "--minimum-records", $MinimumRecords,
-    "--min-agent-days", $MinAgentDays,
-    "--budget", $Budget,
-    "--z-vol", $ZVol,
-    "--vwap-rel-std-max", $VwapRelStdMax
+    "--min-agent-days", $MinAgentDays
 )
+
+if ($PSBoundParameters.ContainsKey("Budget")) {
+    $arguments += @("--budget", $Budget)
+}
+
+if ($PSBoundParameters.ContainsKey("ZVol")) {
+    $arguments += @("--z-vol", $ZVol)
+}
+
+if ($PSBoundParameters.ContainsKey("VwapRelStdMax")) {
+    $arguments += @("--vwap-rel-std-max", $VwapRelStdMax)
+}
 
 if ($Tickers.Count -gt 0) {
     foreach ($ticker in $Tickers) {
@@ -55,6 +89,42 @@ if ($AllTickers.IsPresent) {
 
 if ($EnhancedSell.IsPresent) {
     $arguments += "--enhanced-sell"
+}
+
+if ($NoEnhancedSell.IsPresent) {
+    $arguments += "--no-enhanced-sell"
+}
+
+if ($PSBoundParameters.ContainsKey("SellAfterDays")) {
+    $arguments += @("--sell-after-days", $SellAfterDays)
+}
+
+if ($PSBoundParameters.ContainsKey("MinHoldDays")) {
+    $arguments += @("--min-hold-days", $MinHoldDays)
+}
+
+if ($PSBoundParameters.ContainsKey("TakeProfitPct")) {
+    $arguments += @("--take-profit-pct", $TakeProfitPct)
+}
+
+if ($PSBoundParameters.ContainsKey("StopLossPct")) {
+    $arguments += @("--stop-loss-pct", $StopLossPct)
+}
+
+if ($PSBoundParameters.ContainsKey("TrailingStopPct")) {
+    $arguments += @("--trailing-stop-pct", $TrailingStopPct)
+}
+
+if ($PSBoundParameters.ContainsKey("PartialSellRatio")) {
+    $arguments += @("--partial-sell-ratio", $PartialSellRatio)
+}
+
+if ($PrioritizeTimeExit.IsPresent) {
+    $arguments += "--prioritize-time-exit"
+}
+
+if ($NoPrioritizeTimeExit.IsPresent) {
+    $arguments += "--no-prioritize-time-exit"
 }
 
 if ($MaxWorkers -gt 0) {
