@@ -2,7 +2,7 @@
 param(
     [string]$Python = "python",
     [string]$EnvPath,
-    [string]$OutputDir = (Join-Path $env:USERPROFILE "Downloads"),
+    [string]$OutputDir,
     [int]$MinimumRecords = 20,
     [int]$MinAgentDays = 240,
     [Nullable[Double]]$Budget,
@@ -29,20 +29,14 @@ param(
 #   -EnvPath C:\Users\byeun\workspace\perfectdays\.env `
 #   -OutputDir C:\Users\byeun\Downloads `
 #   -Tickers A010420,A005930 `
-#   -EnhancedSell `
 #   -MaxWorkers 4
-#   # MaxWorkers controls concurrent preprocessing of stock signals.
 #   -ConfigPath C:\Users\byeun\workspace\perfectdays\config\strategy01.yaml
-#   -SellAfterDays 5
+#   # When omitted, EnvPath/OutputDir/Tickers/MaxWorkers come from strategy01.yaml
 
 $ErrorActionPreference = "Stop"
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $scriptDir
-
-if (-not $EnvPath) {
-    $EnvPath = Join-Path $repoRoot ".env"
-}
 
 if ($EnhancedSell.IsPresent -and $NoEnhancedSell.IsPresent) {
     throw "Specify only one of -EnhancedSell or -NoEnhancedSell."
@@ -58,12 +52,18 @@ if (-not $PSBoundParameters.ContainsKey("ConfigPath")) {
 
 $arguments = @(
     "-m", "backtests.strategy01.eda_strategy01_agent",
-    "--env-path", $EnvPath,
     "--config", $ConfigPath,
-    "--output-dir", $OutputDir,
     "--minimum-records", $MinimumRecords,
     "--min-agent-days", $MinAgentDays
 )
+
+if ($PSBoundParameters.ContainsKey("EnvPath")) {
+    $arguments += @("--env-path", $EnvPath)
+}
+
+if ($PSBoundParameters.ContainsKey("OutputDir")) {
+    $arguments += @("--output-dir", $OutputDir)
+}
 
 if ($PSBoundParameters.ContainsKey("Budget")) {
     $arguments += @("--budget", $Budget)

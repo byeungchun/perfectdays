@@ -49,6 +49,14 @@ def load_strategy_config(config_path: Path | None) -> dict[str, Any]:
     return dict(data)
 
 
+DEFAULT_GENERAL_SETTINGS: dict[str, Any] = {
+    "env_path": (Path(__file__).resolve().parents[1] / ".env").resolve(),
+    "output_dir": Path.home() / "Downloads",
+    "tickers": None,
+    "max_workers": None,
+}
+
+
 DEFAULT_STRATEGY_SETTINGS: dict[str, Any] = {
     "budget": 100_000_000.0,
     "z_vol": 1.0,
@@ -175,10 +183,14 @@ def run_simulation(
 
 
 def parse_args() -> argparse.Namespace:
-    default_env = Path(__file__).resolve().parents[1] / ".env"
     default_config = Path(__file__).resolve().parents[3] / "config" / "strategy01.yaml"
     parser = argparse.ArgumentParser(description="Run the strategy 01 agent simulation.")
-    parser.add_argument("--env-path", default=default_env, type=Path, help="Path to the .env file or its parent directory.")
+    parser.add_argument(
+        "--env-path",
+        default=None,
+        type=Path,
+        help="Path to the .env file or its parent directory.",
+    )
     parser.add_argument(
         "--config",
         default=default_config,
@@ -186,10 +198,10 @@ def parse_args() -> argparse.Namespace:
         help="Path to a YAML file containing InvestorAgent parameters.",
     )
     parser.add_argument(
-        "--output-dir",
-        default=Path.home() / "Downloads",
-        type=Path,
-        help="Directory where pickle outputs will be written.",
+    "--output-dir",
+    default=None,
+    type=Path,
+    help="Directory where pickle outputs will be written.",
     )
     parser.add_argument("--minimum-records", default=20, type=int, help="Minimum lookback window for signals.")
     parser.add_argument("--min-agent-days", default=240, type=int, help="Minimum history days required to keep an agent.")
@@ -289,33 +301,6 @@ def main() -> int:
     args = parse_args()
 
     try:
-        data_dir = load_environment(args.env_path)
-    except Exception as exc:  # pragma: no cover - CLI feedback
-        print(f"Failed to initialise environment: {exc}")
-        return 1
-
-    df_compinfo, df_compprice, df_mktcap = load_capiq_frames(data_dir)
-    stocks = build_stock_agents(
-        df_compinfo,
-        df_compprice,
-        df_mktcap,
-        min_history_days=args.min_agent_days,
-    )
-    if not stocks:
-        print("No stocks met the minimum history requirement.")
-        return 1
-
-    _, _, simul_dates = compute_marketcap_timeseries(stocks)
-    if not simul_dates:
-        print("No simulation dates available after aggregating market data.")
-        return 1
-
-    if args.all_tickers or not args.tickers:
-        ticker_filter = None
-    else:
-        ticker_filter = set(args.tickers)
-
-    try:
         strategy_cfg = load_strategy_config(args.config)
     except Exception as exc:
         print(f"Failed to load strategy config: {exc}")
@@ -335,6 +320,16 @@ def main() -> int:
         if strategy_cfg and name in strategy_cfg and strategy_cfg[name] is not None:
             return strategy_cfg[name]
         return default
+
+    def resolve_path(name: str, cli_value: Path | None, default: Path) -> Path:
+        value = resolve(name, cli_value, default)
+        if value is None:
+            raise ValueError(f"Parameter '{name}' must be a valid path")
+        if isinstance(value, Path):
+            path_value = value
+        else:
+            path_value = Path(str(value))
+        return path_value.expanduser().resolve()
 
     def resolve_numeric(
         name: str,
@@ -369,6 +364,75 @@ def main() -> int:
         if isinstance(value, (int, float)) and value in {0, 1}:
             return bool(value)
         raise ValueError(f"Parameter '{name}' must be boolean-compatible, got {value!r}")
+
+    try:
+        env_path = resolve_path("env_path", args.env_path, DEFAULT_GENERAL_SETTINGS["env_path"])
+    except ValueError as exc:
+        print(f"Configuration error: {exc}")
+        return 1
+
+    try:
+        data_dir = load_environment(env_path)
+    except Exception as exc:  # pragma: no cover - CLI feedback
+        print(f"Failed to initialise environment: {exc}")
+        return 1
+
+    df_compinfo, df_compprice, df_mktcap = load_capiq_frames(data_dir)
+    stocks = build_stock_agents(
+        df_compinfo,
+        df_compprice,
+        df_mktcap,
+        min_history_days=args.min_agent_days,
+    )
+    if not stocks:
+        print("No stocks met the minimum history requirement.")
+        return 1
+
+    _, _, simul_dates = compute_marketcap_timeseries(stocks)
+    if not simul_dates:
+        print("No simulation dates available after aggregating market data.")
+        return 1
+
+    try:
+        output_dir = resolve_path("output_dir", args.output_dir, DEFAULT_GENERAL_SETTINGS["output_dir"])
+    except ValueError as exc:
+        print(f"Configuration error: {exc}")
+        return 1
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.all_tickers:
+        ticker_filter = None
+    else:
+        if args.tickers:
+            ticker_filter = set(args.tickers)
+        else:
+            cfg_tickers = resolve("tickers", None, DEFAULT_GENERAL_SETTINGS["tickers"])
+            if cfg_tickers:
+                if isinstance(cfg_tickers, str):
+                    symbol = cfg_tickers.strip()
+                    ticker_filter = {symbol} if symbol else None
+                else:
+                    try:
+                        candidates = {str(t).strip() for t in cfg_tickers if str(t).strip()}
+                        ticker_filter = candidates if candidates else None
+                    except TypeError:
+                        print("Configuration error: 'tickers' must be a string or iterable of strings.")
+                        return 1
+            else:
+                ticker_filter = None
+
+    cfg_max_workers = resolve("max_workers", args.max_workers, DEFAULT_GENERAL_SETTINGS["max_workers"])
+    effective_max_workers: int | None
+    if cfg_max_workers is None:
+        effective_max_workers = None
+    else:
+        try:
+            effective_max_workers = int(cfg_max_workers)
+        except (TypeError, ValueError):
+            print(f"Configuration error: 'max_workers' must be an integer-compatible value, got {cfg_max_workers!r}")
+            return 1
+        if effective_max_workers <= 0:
+            effective_max_workers = None
 
     try:
         strategy_params = {
@@ -472,7 +536,7 @@ def main() -> int:
         budget=strategy_params["budget"],
         ticker_filter=ticker_filter,
         enhanced_sell=strategy_params["enhanced_sell"],
-        max_workers=args.max_workers,
+        max_workers=effective_max_workers,
         sell_after_days=strategy_params["sell_after_days"],
         min_hold_days=strategy_params["min_hold_days"],
         take_profit_pct=strategy_params["take_profit_pct"],
@@ -483,8 +547,8 @@ def main() -> int:
     )
 
     report_simulation_summary(simulation_results, shares_owned, revenue_records)
-    persist_results(args.output_dir, "strategy01", simulation_results, shares_owned, revenue_records)
-    report_final_outcome(cash_balance, args.output_dir)
+    persist_results(output_dir, "strategy01", simulation_results, shares_owned, revenue_records)
+    report_final_outcome(cash_balance, output_dir)
     return 0
 
 
