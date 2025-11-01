@@ -1,16 +1,14 @@
 # 실행 환경 및 출력 설정
 env_path: 'C:\Users\byeun\workspace\perfectdays\.env'
-output_dir: 'C:\Users\byeun\Downloads\strategy01'
-max_workers: 6
-tickers:
-	- A010420
-	- A005930
+output_dir: 'C:\Users\byeun\Downloads'
+max_workers: null
+tickers: null
 
 # 투자 에이전트(InvestorAgent) 주요 파라미터 설정 예시
-budget: 10000000  # 초기 자본
-z_vol: 1.5
-vwap_rel_std_max: 0.03
-enhanced_sell: true    # 고급 매도 로직 사용 여부
+budget: 100000000  # 초기 자본 (기존 CLI 기본값과 동일)
+z_vol: 1.0
+vwap_rel_std_max: 0.005
+enhanced_sell: false    # 고급 매도 로직 사용 여부
 sell_after_days: 5     # 보유 후 매도까지의 최소 일수
 # 전략 규칙이 존재하는 동안 최소 보유 일수 (0이면 제한 없음)
 min_hold_days: 0
