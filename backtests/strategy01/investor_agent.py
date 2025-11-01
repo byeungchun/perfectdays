@@ -282,6 +282,11 @@ class InvestorAgent:
             position["shares"] = shares_held - shares_to_sell
             simul_res["invest_flag"] = "holding"
         else:
+            position["shares"] = 0
+            position["sold_price"] = current_price
+            position["sold_date"] = simuldate
+            if reason:
+                position["sell_reason"] = reason
             simul_res["invest_flag"] = "sold"
         return self.cash_balance
 

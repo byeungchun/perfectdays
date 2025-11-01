@@ -1,0 +1,18 @@
+# Conservative investor configuration
+env_path: 'C:\Users\byeun\workspace\perfectdays\.env'
+output_dir: 'C:\Users\byeun\Downloads\strategy01_conservative'
+max_workers: 4
+tickers: null
+
+budget: 50000000
+z_vol: 1.5
+vwap_rel_std_max: 0.003
+enhanced_sell: true
+sell_after_days: 7
+min_hold_days: 2
+prioritize_time_exit: true
+
+take_profit_pct: 0.05
+stop_loss_pct: 0.02
+trailing_stop_pct: 0.015
+partial_sell_ratio: 0.5
