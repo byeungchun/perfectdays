@@ -1,8 +1,10 @@
 # 실행 환경 및 출력 설정
-env_path: 'C:\Users\byeun\workspace\perfectdays\.env'
-output_dir: 'C:\Users\byeun\Downloads'
-max_workers: null
-tickers: null
+env_path: 'C:\Users\by003457\workspace\perfectdays\.env'
+output_dir: 'C:\Users\by003457\Downloads\strategy01'
+max_workers: 6
+# tickers:
+# 	- A010420
+# 	- A005930
 
 # 투자 에이전트(InvestorAgent) 주요 파라미터 설정 예시
 budget: 100000000  # 초기 자본 (기존 CLI 기본값과 동일)
