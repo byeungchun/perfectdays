@@ -1,6 +1,6 @@
 # Aggressive investor configuration
-env_path: 'C:\Users\byeun\workspace\perfectdays\.env'
-output_dir: 'C:\Users\byeun\Downloads\strategy01_aggressive'
+env_path: 'C:\Users\by003457\workspace\perfectdays\.env'
+output_dir: 'C:\Users\by003457\Downloads\strategy01_aggressive'
 max_workers: 8
 tickers: null
 

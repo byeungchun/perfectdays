@@ -1,6 +1,6 @@
 # Conservative investor configuration
-env_path: 'C:\Users\byeun\workspace\perfectdays\.env'
-output_dir: 'C:\Users\byeun\Downloads\strategy01_conservative'
+env_path: 'C:\Users\by003457\workspace\perfectdays\.env'
+output_dir: 'C:\Users\by003457\Downloads\strategy01_conservative'
 max_workers: 4
 tickers: null
 
