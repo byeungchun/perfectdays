@@ -151,7 +151,9 @@ def _prepare_revenue_dataframe(
         df["shares_sold"].abs() * (df["sold_price"] - df["bought_price"]),
         np.nan,
     )
-    df["revenue"] = df["revenue"].fillna(derived_revenue)
+    derived_series = pd.Series(derived_revenue, index=df.index)
+    fill_mask = df["revenue"].isna() & derived_series.notna()
+    df.loc[fill_mask, "revenue"] = derived_series[fill_mask]
 
     df.dropna(subset=["ticker", "sell_date", "revenue"], inplace=True)
     if df.empty:
