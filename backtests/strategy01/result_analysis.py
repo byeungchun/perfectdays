@@ -28,7 +28,7 @@ def persist_results(
     with open(output_dir / f"revenue_records_{prefix}.pkl", "wb") as f:
         pickle.dump(revenue_records, f)
 
-    generate_company_revenue_analysis(output_dir, prefix, revenue_records)
+    generate_company_revenue_analysis(output_dir, prefix, shares_owned, revenue_records)
 
 
 def report_simulation_summary(
@@ -58,11 +58,12 @@ DEFAULT_COMPINFO_FILENAME = "comp_naics_code_common_stock_kr.parquet"
 def generate_company_revenue_analysis(
     output_dir: Path,
     prefix: str,
+    shares_owned: Mapping[str, Sequence],
     revenue_records: Mapping[str, Sequence],
     compinfo_path: Path | None = None,
 ) -> Path | None:
     """Create an Excel overview of revenue performance for each company."""
-    revenue_df = _prepare_revenue_dataframe(revenue_records)
+    revenue_df = _prepare_revenue_dataframe(revenue_records, shares_owned)
     if revenue_df.empty:
         print("No revenue records available for Excel export; skipping company analysis.")
         return None
@@ -112,8 +113,61 @@ def generate_company_revenue_analysis(
 
 def _prepare_revenue_dataframe(
     revenue_records: Mapping[str, Sequence],
+    shares_owned: Mapping[str, Sequence],
 ) -> pd.DataFrame:
-    """Flatten nested revenue records and clean columns for analysis."""
+    """Combine revenue snapshots with holdings-derived detail for analysis."""
+    revenue_df = _flatten_revenue_records(revenue_records)
+    holdings_sales_df = _extract_sales_from_holdings(shares_owned)
+
+    if revenue_df.empty and holdings_sales_df.empty:
+        return pd.DataFrame()
+
+    if revenue_df.empty:
+        df = holdings_sales_df
+    elif holdings_sales_df.empty:
+        df = revenue_df
+    else:
+        df = pd.concat([revenue_df, holdings_sales_df], ignore_index=True, sort=False)
+        df.sort_values(["ticker", "sell_date"], inplace=True)
+        df.drop_duplicates(
+            subset=["ticker", "sell_date", "sold_price", "shares_sold"],
+            keep="last",
+            inplace=True,
+        )
+
+    if "sell_date" in df.columns:
+        df["sell_date"] = pd.to_datetime(df["sell_date"], errors="coerce")
+
+    numeric_cols = ["revenue", "shares_sold", "sold_price", "bought_price"]
+    for column in numeric_cols:
+        if column in df.columns:
+            df[column] = pd.to_numeric(df[column], errors="coerce")
+        else:
+            df[column] = np.nan
+
+    # derive revenue when holdings supply enough data
+    derived_revenue = np.where(
+        df["shares_sold"].notna() & df["bought_price"].notna() & df["sold_price"].notna(),
+        df["shares_sold"].abs() * (df["sold_price"] - df["bought_price"]),
+        np.nan,
+    )
+    df["revenue"] = df["revenue"].fillna(derived_revenue)
+
+    df.dropna(subset=["ticker", "sell_date", "revenue"], inplace=True)
+    if df.empty:
+        return df
+
+    df["profit_pct"] = np.where(
+        df["bought_price"] > 0,
+        (df["sold_price"] - df["bought_price"]) / df["bought_price"],
+        np.nan,
+    )
+
+    return df
+
+
+def _flatten_revenue_records(revenue_records: Mapping[str, Sequence]) -> pd.DataFrame:
+    """Normalise stored revenue logs to a tabular structure."""
     flattened: list[dict[str, Any]] = []
     for ticker, rows in revenue_records.items():
         for row in rows:
@@ -126,28 +180,56 @@ def _prepare_revenue_dataframe(
     if not flattened:
         return pd.DataFrame()
 
-    df = pd.DataFrame(flattened)
-    if "sell_date" in df.columns:
-        df["sell_date"] = pd.to_datetime(df["sell_date"], errors="coerce")
-    numeric_cols = ["revenue", "shares_sold", "sold_price", "bought_price"]
-    for column in numeric_cols:
-        if column in df.columns:
-            df[column] = pd.to_numeric(df[column], errors="coerce")
+    return pd.DataFrame(flattened)
 
-    df.dropna(subset=["ticker", "sell_date", "revenue"], inplace=True)
-    if df.empty:
-        return df
 
-    if "bought_price" in df.columns and "sold_price" in df.columns:
-        df["profit_pct"] = np.where(
-            df["bought_price"] > 0,
-            (df["sold_price"] - df["bought_price"]) / df["bought_price"],
-            np.nan,
-        )
-    else:
-        df["profit_pct"] = np.nan
+def _extract_sales_from_holdings(shares_owned: Mapping[str, Sequence]) -> pd.DataFrame:
+    """Derive sell transactions from holdings history to enrich revenue data."""
+    sale_rows: list[dict[str, Any]] = []
+    for ticker, entries in shares_owned.items():
+        buy_price_lookup: dict[Any, float] = {}
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                continue
+            buy_date = entry.get("buy_date")
+            buy_price = entry.get("buy_price")
+            if buy_date is not None and buy_price is not None and entry.get("shares", 0) >= 0:
+                buy_price_lookup[buy_date] = float(buy_price)
 
-    return df
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                continue
+            sell_date = entry.get("sold_date")
+            sold_price = entry.get("sold_price")
+            if sell_date is None or sold_price is None:
+                continue
+            shares_sold = abs(float(entry.get("shares", 0)))
+            if shares_sold == 0:
+                continue
+            buy_date = entry.get("buy_date")
+            buy_price = entry.get("buy_price")
+            if buy_price is None and buy_date in buy_price_lookup:
+                buy_price = buy_price_lookup[buy_date]
+            revenue = entry.get("revenue")
+            if revenue is None and buy_price is not None:
+                revenue = shares_sold * (float(sold_price) - float(buy_price))
+
+            sale_rows.append(
+                {
+                    "ticker": ticker,
+                    "sell_date": sell_date,
+                    "shares_sold": shares_sold,
+                    "sold_price": float(sold_price),
+                    "bought_price": float(buy_price) if buy_price is not None else np.nan,
+                    "revenue": float(revenue) if revenue is not None else np.nan,
+                    "buy_date": buy_date,
+                }
+            )
+
+    if not sale_rows:
+        return pd.DataFrame()
+
+    return pd.DataFrame(sale_rows)
 
 
 def _bin_profit_distribution(df: pd.DataFrame) -> pd.DataFrame:
