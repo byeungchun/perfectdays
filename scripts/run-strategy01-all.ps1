@@ -14,15 +14,15 @@ if (-not (Test-Path $runnerScript)) {
 $jobs = @()
 foreach ($cfg in $configs) {
     $jobName = "strategy01_" + [System.IO.Path]::GetFileNameWithoutExtension($cfg)
-    Write-Host "Queueing config: $cfg" -ForegroundColor Cyan
+    Write-Host ("Queueing config: {0}" -f $cfg) -ForegroundColor Cyan
     $jobs += Start-Job -Name $jobName -ArgumentList $runnerScript, $cfg -ScriptBlock {
         param($runnerScriptInner, $configPath)
         try {
-            Write-Host "Starting config: $configPath" -ForegroundColor Cyan
+            Write-Host ("Starting config: {0}" -f $configPath) -ForegroundColor Cyan
             & $runnerScriptInner -ConfigPath $configPath
         }
         catch {
-            Write-Error "Run failed for $configPath: $_"
+            Write-Error ("Run failed for {0}: {1}" -f $configPath, $_)
             throw
         }
     }
