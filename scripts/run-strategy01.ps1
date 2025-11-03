@@ -134,7 +134,14 @@ if ($MaxWorkers -gt 0) {
 Push-Location $repoRoot
 try {
     Write-Verbose "Running: $Python $($arguments -join ' ')"
-    & $Python @arguments
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & $Python @arguments 2>&1 | ForEach-Object { Write-Output $_ }
+    $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = $previousPreference
+    if ($exitCode -ne 0) {
+        throw "Python exited with code $exitCode"
+    }
 }
 finally {
     Pop-Location
