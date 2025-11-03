@@ -63,7 +63,7 @@ def build_stock_agents(
     print(f"Unique companies count: {len(df_compinfo2)}")
 
     stocks: list[dict] = []
-    for _, rec in tqdm(df_compinfo2.iterrows(), total=len(df_compinfo2), desc="Creating stocks"):
+    for _, rec in tqdm(df_compinfo2.iterrows(), total=len(df_compinfo2), desc="Creating stocks", disable=True):
         ticker = rec["tickerSymbol"]
         trading_item_id = rec["tradingItemId"]
         comp_name = rec["companyName"]

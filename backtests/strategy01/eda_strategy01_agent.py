@@ -152,7 +152,7 @@ def run_simulation(
     simuldates_done: list = []
     signal_lookup = _build_signal_lookup(stocks, minimum_records, max_workers)
 
-    for simuldate in tqdm(simul_dates, desc="Running simulation"):
+    for simuldate in tqdm(simul_dates, desc="Running simulation", disable=True):
         if len(simuldates_done) < minimum_records:
             simuldates_done.append(simuldate)
             continue
