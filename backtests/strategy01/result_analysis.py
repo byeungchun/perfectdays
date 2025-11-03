@@ -108,6 +108,9 @@ def generate_company_revenue_analysis(
     output_path = output_dir / f"company_revenue_analysis_{sanitized_prefix}.xlsx"
     revenue_rank_df.to_excel(output_path, index=False)
     print(f"Company revenue analysis written to {output_path}")
+
+    _create_periodic_analysis_excel(merged_df, output_dir, sanitized_prefix)
+
     return output_path
 
 
@@ -279,3 +282,135 @@ def _load_company_info(compinfo_path: Path | None) -> pd.DataFrame:
     available_columns = [col for col in desired_columns if col in compinfo.columns]
     deduped = compinfo[available_columns].drop_duplicates(subset=["tickerSymbol"], keep="first")
     return deduped
+
+
+def _create_periodic_analysis_excel(
+    merged_df: pd.DataFrame,
+    output_dir: Path,
+    prefix: str,
+) -> Path | None:
+    """Write monthly, annual, and YoY investor summaries to an Excel workbook."""
+    period_df = merged_df.copy()
+    if "sell_date" not in period_df:
+        print("sell_date column missing; skipping period analysis export.")
+        return None
+
+    period_df["sell_date"] = pd.to_datetime(period_df["sell_date"], errors="coerce")
+    period_df.dropna(subset=["sell_date"], inplace=True)
+    if period_df.empty:
+        print("No dated revenue records; skipping period analysis export.")
+        return None
+
+    period_df["sell_year"] = period_df["sell_date"].dt.year.astype("Int64")
+    period_df["sell_month"] = period_df["sell_date"].dt.month.astype("Int64")
+    period_df["sell_year_month"] = period_df["sell_date"].dt.to_period("M").astype(str)
+    period_df["trade_count"] = 1
+    period_df["profitable"] = np.where(period_df.get("profit_pct", np.nan) > 0, 1, 0)
+    period_df["positive_bin"] = np.where(period_df.get("profit_pct", np.nan) >= 0.05, 1, 0)
+
+    monthly_summary = (
+        period_df
+        .groupby(["sell_year", "sell_month", "sell_year_month"], dropna=False)
+        .agg(
+            total_revenue=("revenue", "sum"),
+            trade_count=("trade_count", "sum"),
+            avg_profit_pct=("profit_pct", "mean"),
+            win_trades=("profitable", "sum"),
+            high_win_trades=("positive_bin", "sum"),
+        )
+        .reset_index()
+        .sort_values(["sell_year", "sell_month"])
+    )
+    monthly_summary["win_ratio"] = np.where(
+        monthly_summary["trade_count"] > 0,
+        monthly_summary["win_trades"] / monthly_summary["trade_count"],
+        np.nan,
+    )
+    monthly_summary["high_win_ratio"] = np.where(
+        monthly_summary["trade_count"] > 0,
+        monthly_summary["high_win_trades"] / monthly_summary["trade_count"],
+        np.nan,
+    )
+    monthly_summary["avg_profit_pct"] = monthly_summary["avg_profit_pct"] * 100
+    monthly_summary = monthly_summary[
+        [
+            "sell_year_month",
+            "sell_year",
+            "sell_month",
+            "total_revenue",
+            "trade_count",
+            "avg_profit_pct",
+            "win_trades",
+            "high_win_trades",
+            "win_ratio",
+            "high_win_ratio",
+        ]
+    ]
+
+    annual_summary = (
+        period_df
+        .groupby("sell_year", dropna=False)
+        .agg(
+            total_revenue=("revenue", "sum"),
+            trade_count=("trade_count", "sum"),
+            avg_profit_pct=("profit_pct", "mean"),
+            win_trades=("profitable", "sum"),
+            high_win_trades=("positive_bin", "sum"),
+        )
+        .reset_index()
+        .sort_values("sell_year")
+    )
+    annual_summary["win_ratio"] = np.where(
+        annual_summary["trade_count"] > 0,
+        annual_summary["win_trades"] / annual_summary["trade_count"],
+        np.nan,
+    )
+    annual_summary["high_win_ratio"] = np.where(
+        annual_summary["trade_count"] > 0,
+        annual_summary["high_win_trades"] / annual_summary["trade_count"],
+        np.nan,
+    )
+    annual_summary["avg_profit_pct"] = annual_summary["avg_profit_pct"] * 100
+    annual_summary["revenue_yoy_pct"] = annual_summary["total_revenue"].pct_change() * 100
+
+    ticker_cols = ["ticker", "tickerSymbol", "companyName"]
+    candidate_ticker = next((col for col in ticker_cols if col in period_df.columns), None)
+    ticker_group_cols: list[str]
+    if candidate_ticker is not None:
+        ticker_group_cols = [candidate_ticker, "sell_year"]
+        if "companyName" in period_df.columns:
+            ticker_group_cols.insert(1, "companyName") if candidate_ticker != "companyName" else None
+        ticker_summary = (
+            period_df
+            .groupby(ticker_group_cols, dropna=False)
+            .agg(
+                total_revenue=("revenue", "sum"),
+                trade_count=("trade_count", "sum"),
+                avg_profit_pct=("profit_pct", "mean"),
+                win_trades=("profitable", "sum"),
+            )
+            .reset_index()
+        )
+        ticker_summary["avg_profit_pct"] = ticker_summary["avg_profit_pct"] * 100
+        ticker_summary.sort_values([ticker_group_cols[0], "sell_year"], inplace=True)
+        ticker_summary["revenue_yoy_pct"] = (
+            ticker_summary.groupby(ticker_group_cols[0])["total_revenue"].pct_change() * 100
+        )
+        ticker_summary["win_ratio"] = np.where(
+            ticker_summary["trade_count"] > 0,
+            ticker_summary["win_trades"] / ticker_summary["trade_count"],
+            np.nan,
+        )
+    else:
+        ticker_summary = pd.DataFrame()
+
+    output_dir = output_dir.expanduser().resolve()
+    periodic_path = output_dir / f"company_revenue_period_analysis_{prefix}.xlsx"
+    with pd.ExcelWriter(periodic_path) as writer:
+        monthly_summary.to_excel(writer, sheet_name="monthly_overview", index=False)
+        annual_summary.to_excel(writer, sheet_name="annual_overview", index=False)
+        if not ticker_summary.empty:
+            ticker_summary.to_excel(writer, sheet_name="ticker_yearly", index=False)
+
+    print(f"Periodic revenue analysis written to {periodic_path}")
+    return periodic_path

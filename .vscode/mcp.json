@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "perfectdays Docs": {
+      "type": "sse",
+      "url": "https://gitmcp.io/byeungchun/perfectdays"
+    }
+  }
+}
