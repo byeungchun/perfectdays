@@ -1,6 +1,8 @@
 # %%
 import os
+import re
 import json
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
@@ -13,28 +15,23 @@ load_dotenv(r"/rdrive/workspace/perfectdays/.env")
 
 # %%
 NEWS_PARQUET_MONTH_DIR = os.environ["NEWS_PARQUET_MONTH_DIR"]
+INPUT_DIR = Path(NEWS_PARQUET_MONTH_DIR)
+OUTPUT_DIR = Path("/rdrive/rtrs_news")
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# File pattern: yyyy-mm.parquet, year >= 2020
+month_file_re = re.compile(r"(\d{4})-(\d{2})\.parquet$")
+parquet_paths = sorted(
+    p for p in INPUT_DIR.glob("*.parquet")
+    if month_file_re.fullmatch(p.name) and int(p.name[:4]) >= 2020
+)
+
+if not parquet_paths:
+    raise FileNotFoundError(f"No monthly parquet files (yyyy-mm.parquet, year>=2000) found in {INPUT_DIR}")
 
 # %%
-parquet_file = '2025-10.parquet'
-newsfile = os.path.join(NEWS_PARQUET_MONTH_DIR, parquet_file)
-
-# %%
-dfnews = pd.read_parquet(newsfile)
-dfnews['ids'] = dfnews.index.astype(str)
-
-# sampling 1% of dfnews
-FILTER_LANG = 'ko'
-FILTER_SRC = '3PTY'
-dfnews = dfnews[(dfnews['lang_code'] == FILTER_LANG) & (dfnews['src'] == FILTER_SRC)]
-# 1% sampling
-dfnews = dfnews.sample(frac=0.01, random_state=42)
-dfnews['text'] = dfnews.apply(lambda x: x['title'] + '\n\n' + x['content'], axis=1)
-
-# %%
-
 # gemma 27-it
 model_id = r'/rdrive_pvc/huggingface_cache/hub/models--google--gemma-3-27b-it/snapshots/005ad3404e59d6023443cb575daa05336842228a'
-
 
 def build_pipeline(device_id: str):
     return pipeline(
@@ -44,7 +41,6 @@ def build_pipeline(device_id: str):
         device_map=device_id,
     )
 
-
 # Build one pipeline per GPU
 pipe0 = build_pipeline("cuda:0")
 pipe1 = build_pipeline("cuda:1")
@@ -52,9 +48,9 @@ pipe1 = build_pipeline("cuda:1")
 # Keep a default alias to preserve original behavior where `pipe` is used
 pipe = pipe0
 
-# Warm-up/test call (unchanged logic; runs on pipe0)
+# Warm-up/test call (runs once)
 messages = [
-    {"role": "user", "content": "Explain quantum mechanics clearly and concisely."},
+    {"role": "user", "content": "Are you ready for news sentiment analysis?"},
 ]
 outputs = pipe(messages, max_new_tokens=256)
 print(outputs[0]["generated_text"][-1])
@@ -142,7 +138,6 @@ def analyse_sentiment(text: str, llm_pipe=None) -> dict[str, object]:
         return make_fallback("Input text missing or empty.")
 
     safe_text = text.replace("{", "{{").replace("}", "}}").strip()
-    # Avoid str.format to prevent KeyError from JSON braces in the prompt
     prompt_content = sentiment_prompt.replace("{text}", safe_text)
 
     messages = [
@@ -154,7 +149,6 @@ def analyse_sentiment(text: str, llm_pipe=None) -> dict[str, object]:
     except Exception as exc:
         return make_fallback(f"Pipeline failure: {exc}")
 
-    # Extract model content robustly
     content = ""
     try:
         gen = outputs[0].get("generated_text", "")
@@ -173,7 +167,6 @@ def analyse_sentiment(text: str, llm_pipe=None) -> dict[str, object]:
     except Exception as exc:
         return make_fallback(f"Malformed pipeline output: {exc}")
 
-    # Parse JSON strictly; if fail, try to salvage substring between first { and last }
     def parse_json_payload(s: str):
         try:
             return json.loads(s)
@@ -207,85 +200,129 @@ def analyse_sentiment(text: str, llm_pipe=None) -> dict[str, object]:
     }
 
 # %%
-# Refactored sampling loop compatible with the updated prompt and analyse_sentiment()
-
-required_columns = {"text", "title"}
-missing = required_columns - set(dfnews.columns)
-if missing:
-    raise ValueError(f"Missing required columns: {missing}")
-
-sample_size = max(len(dfnews), 5)
-sentiment_samples: list[dict] = []
-
-if sample_size > 0:
-    # Sample rows and iterate directly to avoid Series/DataFrame ambiguity on duplicated index
-    sample_df = dfnews.sample(n=sample_size, random_state=0)
-
-    def _to_str(x) -> str:
-        if x is None or (isinstance(x, float) and pd.isna(x)):
-            return ""
-        return str(x)
-
-    max_chars = 5000  # prevent overly long inputs to the model
-
-    # Prepare rows as a list to preserve original order
-    rows = list(sample_df.itertuples(index=True))
-    num_rows = len(rows)
-
-    def process_row(row, llm_pipe):
-        try:
-            title = _to_str(getattr(row, "title", "")).strip()
-            body = _to_str(getattr(row, "text", "")).strip()
-
-            combined_text = (title + "\n\n" + body).strip() if (title or body) else ""
-            if len(combined_text) > max_chars:
-                combined_text = combined_text[:max_chars]
-
-            result = analyse_sentiment(combined_text, llm_pipe=llm_pipe) if combined_text else {
-                "sentiment": "neutral",
-                "justification": "No content provided.",
-                "related_industry_naics": [],
-                "related_company_names": [],
-            }
-
-            return {
-                "index": row.Index,
-                "headline": title,
-                "sentiment": result.get("sentiment", "neutral"),
-                "justification": result.get("justification", ""),
-                "related_industry_naics": result.get("related_industry_naics", []),
-                "related_company_names": result.get("related_company_names", []),
-            }
-        except Exception as exc:
-            return {
-                "index": row.Index,
-                "headline": _to_str(getattr(row, "title", "")).strip(),
-                "sentiment": "neutral",
-                "justification": f"Processing error: {exc}",
-                "related_industry_naics": [],
-                "related_company_names": [],
-            }
-
-    # Launch jobs concurrently across two GPUs in round-robin assignment
-    pipes = [pipe0, pipe1]
-    results_buffer = [None] * num_rows
-    with ThreadPoolExecutor(max_workers=2) as executor, tqdm(total=num_rows) as pbar:
-        futures = {}
-        for i, row in enumerate(rows):
-            assigned_pipe = pipes[i % 2]
-            fut = executor.submit(process_row, row, assigned_pipe)
-            futures[fut] = i
-
-        for fut in as_completed(futures):
-            i = futures[fut]
-            results_buffer[i] = fut.result()
-            pbar.update(1)
-
-    # Preserve original input order
-    sentiment_samples = [res for res in results_buffer if res is not None]
-else:
-    sentiment_samples = []
+FILTER_LANG = 'ko'
+FILTER_SRC = '3PTY'
 
 # %%
-outfile = os.path.join('/rdrive/rtrs_news', f'{parquet_file[:-8]}_{FILTER_SRC}_{FILTER_LANG}.sentiment.parquet')
-pd.DataFrame(sentiment_samples).to_parquet(outfile)
+for parquet_path in parquet_paths:
+    parquet_file = parquet_path.name
+    print(f"Processing {parquet_file} ...")
+
+    # Read
+    dfnews = pd.read_parquet(parquet_path)
+    print(f"{parquet_file} original shape: {dfnews.shape}")
+
+    # Basic id
+    dfnews['ids'] = dfnews.index.astype(str)
+
+    # Filter
+    dfnews = dfnews[(dfnews.get('lang_code') == FILTER_LANG) & (dfnews.get('src') == FILTER_SRC)]
+    print(f"{parquet_file} after filter ({FILTER_LANG},{FILTER_SRC}): {dfnews.shape}")
+
+    # Ensure required columns exist
+    required_columns = {"title", "content"}
+    missing = required_columns - set(dfnews.columns)
+    if missing:
+        print(f"Skipping {parquet_file}: missing required columns {missing}")
+        continue
+
+    # Drop NA records for title/content and build text without apply
+    dfnews = dfnews.dropna(subset=['title', 'content'])
+    print(f"{parquet_file} after dropna(title,content): {dfnews.shape}")
+
+    # 1% sampling (if empty after drop, this will stay empty)
+    if not dfnews.empty:
+        dfnews = dfnews.sample(frac=0.01, random_state=42)
+    print(f"{parquet_file} after 1% sample: {dfnews.shape}")
+
+    if dfnews.empty:
+        outfile = OUTPUT_DIR / f"{parquet_file[:-8]}_{FILTER_SRC}_{FILTER_LANG}.sentiment.parquet"
+        pd.DataFrame([]).to_parquet(outfile)
+        print(f"Wrote empty output {outfile}")
+        continue
+
+    # Build text column safely (vectorized)
+    dfnews['title'] = dfnews['title'].astype(str)
+    dfnews['content'] = dfnews['content'].astype(str)
+    dfnews['text'] = dfnews['title'] + '\n\n' + dfnews['content']
+
+    # Validate required columns for downstream
+    required_columns_for_loop = {"text", "title"}
+    missing2 = required_columns_for_loop - set(dfnews.columns)
+    if missing2:
+        print(f"Skipping {parquet_file}: missing required columns {missing2}")
+        continue
+
+    # Up to 5 samples max (preserve original behavior)
+    sample_size = max(len(dfnews), 5)
+    print(f"{parquet_file} sample_size: {sample_size}")
+
+    sentiment_samples: list[dict] = []
+    if sample_size > 0:
+        sample_df = dfnews.sample(n=sample_size, random_state=0)
+
+        def _to_str(x) -> str:
+            if x is None or (isinstance(x, float) and pd.isna(x)):
+                return ""
+            return str(x)
+
+        max_chars = 5000
+
+        rows = list(sample_df.itertuples(index=True))
+        num_rows = len(rows)
+
+        def process_row(row, llm_pipe):
+            try:
+                title = _to_str(getattr(row, "title", "")).strip()
+                body = _to_str(getattr(row, "text", "")).strip()
+
+                combined_text = (title + "\n\n" + body).strip() if (title or body) else ""
+                if len(combined_text) > max_chars:
+                    combined_text = combined_text[:max_chars]
+
+                result = analyse_sentiment(combined_text, llm_pipe=llm_pipe) if combined_text else {
+                    "sentiment": "neutral",
+                    "justification": "No content provided.",
+                    "related_industry_naics": [],
+                    "related_company_names": [],
+                }
+
+                return {
+                    "index": row.Index,
+                    "headline": title,
+                    "sentiment": result.get("sentiment", "neutral"),
+                    "justification": result.get("justification", ""),
+                    "related_industry_naics": result.get("related_industry_naics", []),
+                    "related_company_names": result.get("related_company_names", []),
+                }
+            except Exception as exc:
+                return {
+                    "index": row.Index,
+                    "headline": _to_str(getattr(row, "title", "")).strip(),
+                    "sentiment": "neutral",
+                    "justification": f"Processing error: {exc}",
+                    "related_industry_naics": [],
+                    "related_company_names": [],
+                }
+
+        # Two-GPU concurrent processing, round-robin
+        pipes = [pipe0, pipe1]
+        results_buffer = [None] * num_rows
+        with ThreadPoolExecutor(max_workers=2) as executor, tqdm(total=num_rows, desc=f"{parquet_file}") as pbar:
+            futures = {}
+            for i, row in enumerate(rows):
+                assigned_pipe = pipes[i % 2]
+                fut = executor.submit(process_row, row, assigned_pipe)
+                futures[fut] = i
+
+            for fut in as_completed(futures):
+                i = futures[fut]
+                results_buffer[i] = fut.result()
+                pbar.update(1)
+
+        sentiment_samples = [res for res in results_buffer if res is not None]
+
+    # Write per-file output
+    outfile = OUTPUT_DIR / f"{parquet_file[:-8]}_{FILTER_SRC}_{FILTER_LANG}.sentiment.parquet"
+    pd.DataFrame(sentiment_samples).to_parquet(outfile)
+    print(f"Wrote {outfile}")
