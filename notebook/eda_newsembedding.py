@@ -208,6 +208,13 @@ for parquet_path in parquet_paths:
     parquet_file = parquet_path.name
     print(f"Processing {parquet_file} ...")
 
+    outfilename = f"{parquet_file[:-8]}_{FILTER_SRC}_{FILTER_LANG}.sentiment.parquet"
+    outfile = OUTPUT_DIR / outfilename
+
+    if os.path.exists(outfile):
+        print(f"Skip {parquet_file} - already existing")
+        continue
+
     # Read
     dfnews = pd.read_parquet(parquet_path)
     print(f"{parquet_file} original shape: {dfnews.shape}")
@@ -323,6 +330,6 @@ for parquet_path in parquet_paths:
         sentiment_samples = [res for res in results_buffer if res is not None]
 
     # Write per-file output
-    outfile = OUTPUT_DIR / f"{parquet_file[:-8]}_{FILTER_SRC}_{FILTER_LANG}.sentiment.parquet"
+    
     pd.DataFrame(sentiment_samples).to_parquet(outfile)
     print(f"Wrote {outfile}")
