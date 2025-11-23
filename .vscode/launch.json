@@ -1,0 +1,43 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug run-strategy01.ps1",
+            "type": "PowerShell",
+            "request": "launch",
+            "script": "${workspaceFolder}/scripts/run-strategy01.ps1",
+            "args": [
+                "-EnvPath", "C:\\Users\\byeun\\workspace\\perfectdays\\.env",
+                "-OutputDir", "C:\\Users\\byeun\\Downloads",
+                "-Tickers", "A005930",
+                "-MaxWorkers", "4"
+            ],
+            "cwd": "${workspaceFolder}",
+            "createTemporaryIntegratedConsole": true
+        },
+        {
+            "name": "Debug run-strategy01.ps1 (All Tickers)",
+            "type": "PowerShell",
+            "request": "launch",
+            "script": "${workspaceFolder}/scripts/run-strategy01.ps1",
+            "args": [
+                "-AllTickers"
+            ],
+            "cwd": "${workspaceFolder}",
+            "createTemporaryIntegratedConsole": true
+        },
+        {
+            "name": "Debug run-strategy01.ps1 (Custom Config)",
+            "type": "PowerShell",
+            "request": "launch",
+            "script": "${workspaceFolder}/scripts/run-strategy01.ps1",
+            "args": [
+                "-ConfigPath", "${workspaceFolder}/config/strategy01_aggressive.yaml",
+                "-Tickers", "A005930",
+                "-MaxWorkers", "2"
+            ],
+            "cwd": "${workspaceFolder}",
+            "createTemporaryIntegratedConsole": true
+        }
+    ]
+}
