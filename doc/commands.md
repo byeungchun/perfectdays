@@ -11,7 +11,7 @@
 - script: drs/drasai/news_analysis/embedding_newsarticle.sh
 
 ### Setiment analysis for news in pqrquet files
-- script: /notebooks/eda_newsembedding.py
+- script: /notebooks/eda_sentiment_using_gemma.sh
 - setup: two GPUs required in devspace, venv: openaioss in devspace
 - parameters:
   - --news source: RTRS or 3PTY
